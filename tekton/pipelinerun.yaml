@@ -1,0 +1,37 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+
+metadata:
+  generateName: fraud-model-cicd-
+
+spec:
+
+  pipelineRef:
+    name: fraud-model-cicd
+
+  params:
+
+    - name: git-url
+      value: "https://github.com/YOUR_USERNAME/openshift-ai-fraud-mlops.git"
+
+    - name: git-revision
+      value: main
+
+    - name: model-version
+      value: "2"
+
+  workspaces:
+
+    - name: shared-workspace
+
+      volumeClaimTemplate:
+
+        spec:
+
+          accessModes:
+            - ReadWriteOnce
+
+          resources:
+
+            requests:
+              storage: 2Gi
