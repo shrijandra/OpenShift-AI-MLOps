@@ -1,0 +1,158 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+
+metadata:
+  name: fraud-model-cicd
+
+spec:
+
+  params:
+
+    - name: git-url
+      type: string
+
+    - name: git-revision
+      type: string
+      default: main
+
+    - name: model-version
+      type: string
+      default: "1"
+
+  workspaces:
+
+    - name: shared-workspace
+
+  tasks:
+
+    # -----------------------------------
+    # Clone Git repository
+    # -----------------------------------
+
+    - name: clone-repository
+
+      taskRef:
+        resolver: cluster
+        params:
+
+          - name: kind
+            value: task
+
+          - name: name
+            value: git-clone
+
+          - name: namespace
+            value: openshift-pipelines
+
+      params:
+
+        - name: URL
+          value: $(params.git-url)
+
+        - name: REVISION
+          value: $(params.git-revision)
+
+        - name: DELETE_EXISTING
+          value: "true"
+
+      workspaces:
+
+        - name: output
+          workspace: shared-workspace
+
+
+    # -----------------------------------
+    # Train + ONNX Conversion
+    # -----------------------------------
+
+    - name: train-model
+
+      runAfter:
+        - clone-repository
+
+      taskRef:
+        name: train-and-convert-model
+
+      workspaces:
+
+        - name: source
+          workspace: shared-workspace
+
+
+    # -----------------------------------
+    # Validate ONNX
+    # -----------------------------------
+
+    - name: validate-model
+
+      runAfter:
+        - train-model
+
+      taskRef:
+        name: validate-onnx-model
+
+      params:
+
+        - name: model-path
+          value: fraud_model.onnx
+
+      workspaces:
+
+        - name: source
+          workspace: shared-workspace
+
+
+    # -----------------------------------
+    # Upload model to MinIO
+    # -----------------------------------
+
+    - name: upload-model
+
+      runAfter:
+        - validate-model
+
+      taskRef:
+        name: upload-model-to-minio
+
+      params:
+
+        - name: model-path
+          value: fraud_model.onnx
+
+        - name: model-name
+          value: fraud-detection
+
+        - name: model-version
+          value: $(params.model-version)
+
+      workspaces:
+
+        - name: source
+          workspace: shared-workspace
+
+
+    # -----------------------------------
+    # Deploy to OpenShift AI
+    # -----------------------------------
+
+    - name: deploy-model
+
+      runAfter:
+        - upload-model
+
+      taskRef:
+        name: deploy-model
+
+      params:
+
+        - name: namespace
+          value: fraud-mlops
+
+        - name: model-name
+          value: fraud-detection
+
+        - name: model-version
+          value: $(params.model-version)
+
+        - name: bucket
+          value: models
