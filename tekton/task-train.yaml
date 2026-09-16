@@ -1,0 +1,49 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: train-and-convert-model
+spec:
+
+  workspaces:
+    - name: source
+
+  steps:
+
+    - name: train-model
+      image: python:3.11-slim
+      workingDir: $(workspaces.source.path)
+
+      script: |
+        #!/bin/bash
+        set -e
+
+        echo "=================================="
+        echo "Installing Python dependencies"
+        echo "=================================="
+
+        pip install --no-cache-dir \
+          numpy \
+          pandas \
+          scikit-learn \
+          joblib \
+          skl2onnx \
+          onnx \
+          onnxruntime
+
+        echo "=================================="
+        echo "Training Fraud Detection Model"
+        echo "=================================="
+
+        python src/train_fraud.py
+
+        echo "=================================="
+        echo "Converting Model to ONNX"
+        echo "=================================="
+
+        python src/convert_fraud.py
+
+        echo "=================================="
+        echo "Model files"
+        echo "=================================="
+
+        find . -name "*.onnx" -o -name "*.joblib"
