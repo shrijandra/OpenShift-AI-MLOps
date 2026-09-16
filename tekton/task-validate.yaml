@@ -1,0 +1,79 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: validate-onnx-model
+spec:
+
+  params:
+    - name: model-path
+      default: "fraud_model.onnx"
+
+  workspaces:
+    - name: source
+
+  steps:
+
+    - name: validate
+      image: python:3.11-slim
+      workingDir: $(workspaces.source.path)
+
+      script: |
+        #!/bin/bash
+        set -e
+
+        pip install --no-cache-dir onnx onnxruntime numpy
+
+        python - <<'PY'
+
+        import onnx
+        import onnxruntime as ort
+        import numpy as np
+
+        model_path = "$(params.model-path)"
+
+        print("")
+        print("================================")
+        print("ONNX MODEL VALIDATION")
+        print("================================")
+
+        model = onnx.load(model_path)
+
+        onnx.checker.check_model(model)
+
+        print("ONNX structure: VALID")
+
+        session = ort.InferenceSession(model_path)
+
+        input_info = session.get_inputs()[0]
+
+        print("Input Name :", input_info.name)
+        print("Input Shape:", input_info.shape)
+        print("Input Type :", input_info.type)
+
+        test_input = np.array([
+            [
+                100.0,
+                10.0,
+                5.0,
+                1.2,
+                1.0,
+                1.0,
+                0.0,
+                1.0
+            ]
+        ], dtype=np.float32)
+
+        prediction = session.run(
+            None,
+            {input_info.name: test_input}
+        )
+
+        print("")
+        print("Test prediction:", prediction)
+
+        print("")
+        print("================================")
+        print("MODEL VALIDATION PASSED")
+        print("================================")
+
+        PY
