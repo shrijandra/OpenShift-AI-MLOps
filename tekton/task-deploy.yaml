@@ -1,0 +1,71 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deploy-model
+
+spec:
+
+  params:
+
+    - name: namespace
+      default: "fraud-mlops"
+
+    - name: model-name
+      default: "fraud-detection"
+
+    - name: bucket
+      default: "models"
+
+    - name: model-version
+      default: "1"
+
+    - name: runtime
+      default: "ovms-runtime"
+
+    - name: service-account
+      default: "model-server"
+
+  steps:
+
+    - name: deploy
+      image: registry.redhat.io/openshift4/ose-cli:latest
+
+      script: |
+        #!/bin/bash
+        set -e
+
+        echo "================================="
+        echo "Deploying model to OpenShift AI"
+        echo "================================="
+
+        cat <<EOF | oc apply -f -
+
+        apiVersion: serving.kserve.io/v1beta1
+        kind: InferenceService
+
+        metadata:
+          name: $(params.model-name)
+          namespace: $(params.namespace)
+
+        spec:
+
+          predictor:
+
+            serviceAccountName: $(params.service-account)
+
+            model:
+
+              modelFormat:
+                name: onnx
+
+              runtime: $(params.runtime)
+
+              storageUri: s3://$(params.bucket)/$(params.model-name)/$(params.model-version)/
+
+        EOF
+
+        echo ""
+        echo "InferenceService:"
+        oc get inferenceservice \
+          $(params.model-name) \
+          -n $(params.namespace)
