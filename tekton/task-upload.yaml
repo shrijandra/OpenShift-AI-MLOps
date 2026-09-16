@@ -1,0 +1,78 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: upload-model-to-minio
+
+spec:
+
+  params:
+
+    - name: model-path
+      default: "fraud_model.onnx"
+
+    - name: model-name
+      default: "fraud-detection"
+
+    - name: model-version
+      default: "1"
+
+  workspaces:
+    - name: source
+
+  steps:
+
+    - name: upload-model
+      image: quay.io/minio/mc:latest
+      workingDir: $(workspaces.source.path)
+
+      env:
+
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: MINIO_ENDPOINT
+
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: MINIO_ACCESS_KEY
+
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: MINIO_SECRET_KEY
+
+        - name: MINIO_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: MINIO_BUCKET
+
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "================================="
+        echo "Connecting to MinIO"
+        echo "================================="
+
+        mc alias set modelstore \
+          "$MINIO_ENDPOINT" \
+          "$MINIO_ACCESS_KEY" \
+          "$MINIO_SECRET_KEY"
+
+        echo "================================="
+        echo "Uploading ONNX model"
+        echo "================================="
+
+        mc cp \
+          $(params.model-path) \
+          modelstore/$MINIO_BUCKET/$(params.model-name)/$(params.model-version)/model.onnx
+
+        echo ""
+        echo "Model uploaded:"
+        echo ""
+        echo "s3://$MINIO_BUCKET/$(params.model-name)/$(params.model-version)/"
