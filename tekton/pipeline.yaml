@@ -2,39 +2,76 @@ apiVersion: tekton.dev/v1
 kind: Pipeline
 
 metadata:
-  name: fraud-model-cicd
+  name: bank-model-ci
 
 spec:
+
+  description: |
+    Reusable MLOps CI pipeline for Fraud Detection and
+    Loan Default Risk models.
+
+    Flow:
+      Git Clone
+        -> Train Model
+        -> Convert to ONNX
+        -> Validate ONNX
+        -> Upload versioned model to MinIO
+
+  # ============================================================
+  # PARAMETERS
+  # ============================================================
 
   params:
 
     - name: git-url
       type: string
+      description: Git repository containing the ML source code
 
     - name: git-revision
       type: string
+      description: Git branch, tag, or commit
       default: main
+
+    - name: model-name
+      type: string
+      description: "Model to process: fraud or loan"
 
     - name: model-version
       type: string
+      description: Version to publish to MinIO
       default: "1"
+
+    - name: minio-bucket
+      type: string
+      description: MinIO bucket used for model storage
+      default: models
+
+
+  # ============================================================
+  # SHARED WORKSPACE
+  # ============================================================
 
   workspaces:
 
     - name: shared-workspace
+      description: Shared workspace used by all pipeline tasks
+
+
+  # ============================================================
+  # PIPELINE TASKS
+  # ============================================================
 
   tasks:
 
-    # -----------------------------------
-    # Clone Git repository
-    # -----------------------------------
+    # ==========================================================
+    # TASK 1 - CLONE GIT REPOSITORY
+    # ==========================================================
 
     - name: clone-repository
 
       taskRef:
         resolver: cluster
         params:
-
           - name: kind
             value: task
 
@@ -61,17 +98,142 @@ spec:
           workspace: shared-workspace
 
 
-    # -----------------------------------
-    # Train + ONNX Conversion
-    # -----------------------------------
+    # ==========================================================
+    # TASK 2 - TRAIN MODEL
+    # ==========================================================
 
     - name: train-model
 
       runAfter:
         - clone-repository
 
-      taskRef:
-        name: train-and-convert-model
+      taskSpec:
+
+        params:
+          - name: model-name
+            type: string
+
+        workspaces:
+          - name: source
+
+        steps:
+
+          - name: train
+            image: python:3.11-slim
+
+            workingDir: $(workspaces.source.path)
+
+            script: |
+              #!/bin/bash
+
+              set -e
+
+              echo "================================================"
+              echo " BANK MODEL CI - TRAINING"
+              echo "================================================"
+
+              echo ""
+              echo "Selected model: $(params.model-name)"
+              echo ""
+
+              # -----------------------------------------------
+              # Install dependencies
+              # -----------------------------------------------
+
+              echo "Installing Python dependencies..."
+
+              python -m pip install --upgrade pip
+
+              if [ -f requirements.txt ]; then
+
+                  echo "requirements.txt found."
+
+                  pip install --no-cache-dir \
+                    -r requirements.txt
+
+              else
+
+                  echo "ERROR: requirements.txt not found."
+                  exit 1
+
+              fi
+
+
+              # -----------------------------------------------
+              # Select model
+              # -----------------------------------------------
+
+              if [ "$(params.model-name)" = "fraud" ]; then
+
+                  TRAIN_SCRIPT="train_fraud_8.py"
+                  JOBLIB_FILE="fraud-classifier.joblib"
+
+              elif [ "$(params.model-name)" = "loan" ]; then
+
+                  TRAIN_SCRIPT="train_loan.py"
+                  JOBLIB_FILE="loan-default-risk.joblib"
+
+              else
+
+                  echo "ERROR:"
+                  echo "model-name must be either:"
+                  echo "  fraud"
+                  echo "  loan"
+
+                  exit 1
+
+              fi
+
+
+              echo ""
+              echo "Training script:"
+              echo "$TRAIN_SCRIPT"
+
+              echo ""
+              echo "Expected artifact:"
+              echo "$JOBLIB_FILE"
+
+              echo ""
+
+              # -----------------------------------------------
+              # Train model
+              # -----------------------------------------------
+
+              python "$TRAIN_SCRIPT"
+
+
+              # -----------------------------------------------
+              # Verify training artifact
+              # -----------------------------------------------
+
+              if [ ! -f "$JOBLIB_FILE" ]; then
+
+                  echo ""
+                  echo "ERROR:"
+                  echo "Training completed but artifact was not found:"
+                  echo "$JOBLIB_FILE"
+
+                  exit 1
+
+              fi
+
+
+              echo ""
+              echo "Training successful."
+              echo ""
+
+              ls -lh "$JOBLIB_FILE"
+
+              echo ""
+              echo "================================================"
+              echo " TRAINING COMPLETE"
+              echo "================================================"
+
+
+      params:
+
+        - name: model-name
+          value: $(params.model-name)
 
       workspaces:
 
@@ -79,22 +241,123 @@ spec:
           workspace: shared-workspace
 
 
-    # -----------------------------------
-    # Validate ONNX
-    # -----------------------------------
+    # ==========================================================
+    # TASK 3 - CONVERT MODEL TO ONNX
+    # ==========================================================
 
-    - name: validate-model
+    - name: convert-to-onnx
 
       runAfter:
         - train-model
 
-      taskRef:
-        name: validate-onnx-model
+      taskSpec:
+
+        params:
+          - name: model-name
+            type: string
+
+        workspaces:
+          - name: source
+
+        steps:
+
+          - name: convert
+            image: python:3.11-slim
+
+            workingDir: $(workspaces.source.path)
+
+            script: |
+              #!/bin/bash
+
+              set -e
+
+              echo "================================================"
+              echo " ONNX CONVERSION"
+              echo "================================================"
+
+              echo ""
+              echo "Selected model: $(params.model-name)"
+              echo ""
+
+
+              # -----------------------------------------------
+              # Install dependencies
+              # -----------------------------------------------
+
+              pip install --no-cache-dir \
+                -r requirements.txt
+
+
+              # -----------------------------------------------
+              # Select conversion script
+              # -----------------------------------------------
+
+              if [ "$(params.model-name)" = "fraud" ]; then
+
+                  CONVERT_SCRIPT="convert_fraud_8.py"
+                  ONNX_FILE="model.onnx"
+
+              elif [ "$(params.model-name)" = "loan" ]; then
+
+                  CONVERT_SCRIPT="convert_loan.py"
+                  ONNX_FILE="loan-model.onnx"
+
+              else
+
+                  echo "ERROR: Unknown model."
+                  exit 1
+
+              fi
+
+
+              echo "Conversion script:"
+              echo "$CONVERT_SCRIPT"
+
+              echo ""
+              echo "Expected ONNX artifact:"
+              echo "$ONNX_FILE"
+
+              echo ""
+
+
+              # -----------------------------------------------
+              # Convert
+              # -----------------------------------------------
+
+              python "$CONVERT_SCRIPT"
+
+
+              # -----------------------------------------------
+              # Verify ONNX artifact
+              # -----------------------------------------------
+
+              if [ ! -f "$ONNX_FILE" ]; then
+
+                  echo ""
+                  echo "ERROR:"
+                  echo "ONNX conversion completed but file not found:"
+                  echo "$ONNX_FILE"
+
+                  exit 1
+
+              fi
+
+
+              echo ""
+              echo "ONNX model successfully generated."
+
+              ls -lh "$ONNX_FILE"
+
+              echo ""
+              echo "================================================"
+              echo " ONNX CONVERSION COMPLETE"
+              echo "================================================"
+
 
       params:
 
-        - name: model-path
-          value: fraud_model.onnx
+        - name: model-name
+          value: $(params.model-name)
 
       workspaces:
 
@@ -102,57 +365,320 @@ spec:
           workspace: shared-workspace
 
 
-    # -----------------------------------
-    # Upload model to MinIO
-    # -----------------------------------
+    # ==========================================================
+    # TASK 4 - VALIDATE ONNX MODEL
+    # ==========================================================
+
+    - name: validate-model
+
+      runAfter:
+        - convert-to-onnx
+
+      taskSpec:
+
+        params:
+          - name: model-name
+            type: string
+
+        workspaces:
+          - name: source
+
+        steps:
+
+          - name: validate
+            image: python:3.11-slim
+
+            workingDir: $(workspaces.source.path)
+
+            script: |
+              #!/bin/bash
+
+              set -e
+
+              echo "================================================"
+              echo " MODEL VALIDATION"
+              echo "================================================"
+
+              echo ""
+              echo "Selected model: $(params.model-name)"
+              echo ""
+
+
+              # -----------------------------------------------
+              # Install validation dependencies
+              # -----------------------------------------------
+
+              pip install --no-cache-dir \
+                -r requirements.txt
+
+
+              # -----------------------------------------------
+              # Select validation script
+              # -----------------------------------------------
+
+              if [ "$(params.model-name)" = "fraud" ]; then
+
+                  VALIDATE_SCRIPT="validate_fraud.py"
+                  ONNX_FILE="model.onnx"
+
+              elif [ "$(params.model-name)" = "loan" ]; then
+
+                  VALIDATE_SCRIPT="validate_loan.py"
+                  ONNX_FILE="loan-model.onnx"
+
+              else
+
+                  echo "ERROR: Unknown model."
+                  exit 1
+
+              fi
+
+
+              # -----------------------------------------------
+              # Verify files
+              # -----------------------------------------------
+
+              if [ ! -f "$ONNX_FILE" ]; then
+
+                  echo "ERROR: ONNX model not found:"
+                  echo "$ONNX_FILE"
+
+                  exit 1
+
+              fi
+
+
+              if [ ! -f "$VALIDATE_SCRIPT" ]; then
+
+                  echo "ERROR: Validation script not found:"
+                  echo "$VALIDATE_SCRIPT"
+
+                  exit 1
+
+              fi
+
+
+              echo "ONNX model:"
+              echo "$ONNX_FILE"
+
+              echo ""
+              echo "Validation script:"
+              echo "$VALIDATE_SCRIPT"
+
+              echo ""
+
+
+              # -----------------------------------------------
+              # Validate model
+              # -----------------------------------------------
+
+              python "$VALIDATE_SCRIPT"
+
+
+              echo ""
+              echo "================================================"
+              echo " MODEL VALIDATION PASSED"
+              echo "================================================"
+
+
+      params:
+
+        - name: model-name
+          value: $(params.model-name)
+
+      workspaces:
+
+        - name: source
+          workspace: shared-workspace
+
+
+    # ==========================================================
+    # TASK 5 - UPLOAD MODEL TO MINIO
+    # ==========================================================
 
     - name: upload-model
 
       runAfter:
         - validate-model
 
-      taskRef:
-        name: upload-model-to-minio
+      taskSpec:
+
+        params:
+
+          - name: model-name
+            type: string
+
+          - name: model-version
+            type: string
+
+          - name: minio-bucket
+            type: string
+
+        workspaces:
+          - name: source
+
+        steps:
+
+          - name: upload
+            image: quay.io/minio/mc:latest
+
+            workingDir: $(workspaces.source.path)
+
+            env:
+
+              - name: MINIO_ENDPOINT
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: endpoint
+
+              - name: MINIO_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: access-key
+
+              - name: MINIO_SECRET_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: secret-key
+
+            script: |
+              #!/bin/sh
+
+              set -e
+
+              echo "================================================"
+              echo " UPLOAD MODEL TO MINIO"
+              echo "================================================"
+
+              echo ""
+              echo "Model:   $(params.model-name)"
+              echo "Version: $(params.model-version)"
+              echo "Bucket:  $(params.minio-bucket)"
+              echo ""
+
+
+              # -----------------------------------------------
+              # Select model artifact and S3 directory
+              # -----------------------------------------------
+
+              if [ "$(params.model-name)" = "fraud" ]; then
+
+                  ONNX_FILE="model.onnx"
+                  MODEL_DIR="fraud-detection"
+
+              elif [ "$(params.model-name)" = "loan" ]; then
+
+                  ONNX_FILE="loan-model.onnx"
+                  MODEL_DIR="loan-default"
+
+              else
+
+                  echo "ERROR: Unknown model."
+                  exit 1
+
+              fi
+
+
+              # -----------------------------------------------
+              # Verify model exists
+              # -----------------------------------------------
+
+              if [ ! -f "$ONNX_FILE" ]; then
+
+                  echo "ERROR: ONNX model not found:"
+                  echo "$ONNX_FILE"
+
+                  exit 1
+
+              fi
+
+
+              # -----------------------------------------------
+              # Configure MinIO client
+              # -----------------------------------------------
+
+              echo "Connecting to MinIO..."
+
+              mc alias set modelstore \
+                "$MINIO_ENDPOINT" \
+                "$MINIO_ACCESS_KEY" \
+                "$MINIO_SECRET_KEY"
+
+
+              # -----------------------------------------------
+              # Ensure bucket exists
+              # -----------------------------------------------
+
+              mc mb \
+                --ignore-existing \
+                "modelstore/$(params.minio-bucket)"
+
+
+              # -----------------------------------------------
+              # Upload model
+              # -----------------------------------------------
+
+              DESTINATION="$(params.minio-bucket)/${MODEL_DIR}/$(params.model-version)/model.onnx"
+
+
+              echo ""
+              echo "Uploading:"
+              echo "$ONNX_FILE"
+
+              echo ""
+              echo "Destination:"
+              echo "s3://${DESTINATION}"
+
+              echo ""
+
+
+              mc cp \
+                "$ONNX_FILE" \
+                "modelstore/${DESTINATION}"
+
+
+              echo ""
+              echo "Verifying uploaded artifact..."
+
+              mc stat \
+                "modelstore/${DESTINATION}"
+
+
+              echo ""
+              echo "================================================"
+              echo " MODEL PUBLISHED SUCCESSFULLY"
+              echo "================================================"
+
+              echo ""
+              echo "Model:"
+              echo "$(params.model-name)"
+
+              echo ""
+              echo "Version:"
+              echo "$(params.model-version)"
+
+              echo ""
+              echo "S3 URI:"
+              echo "s3://${DESTINATION}"
+
+              echo ""
+
 
       params:
 
-        - name: model-path
-          value: fraud_model.onnx
-
         - name: model-name
-          value: fraud-detection
+          value: $(params.model-name)
 
         - name: model-version
           value: $(params.model-version)
+
+        - name: minio-bucket
+          value: $(params.minio-bucket)
 
       workspaces:
 
         - name: source
           workspace: shared-workspace
-
-
-    # -----------------------------------
-    # Deploy to OpenShift AI
-    # -----------------------------------
-
-    - name: deploy-model
-
-      runAfter:
-        - upload-model
-
-      taskRef:
-        name: deploy-model
-
-      params:
-
-        - name: namespace
-          value: fraud-mlops
-
-        - name: model-name
-          value: fraud-detection
-
-        - name: model-version
-          value: $(params.model-version)
-
-        - name: bucket
-          value: models
