@@ -2,23 +2,55 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 
 metadata:
-  generateName: fraud-model-cicd-
+  generateName: bank-model-ci-
+  labels:
+    app: bank-model-mlops
 
 spec:
 
+  # ----------------------------------------------------------
+  # Pipeline to execute
+  # ----------------------------------------------------------
+
   pipelineRef:
-    name: fraud-model-cicd
+    name: bank-model-ci
+
+
+  # ----------------------------------------------------------
+  # Pipeline parameters
+  # ----------------------------------------------------------
 
   params:
 
+    # Replace with your actual Git repository URL
     - name: git-url
-      value: "https://github.com/YOUR_USERNAME/openshift-ai-fraud-mlops.git"
+      value: "https://github.com/YOUR_USERNAME/OpenShift-AI-MLOps.git"
 
+    # Git branch
     - name: git-revision
-      value: main
+      value: "main"
 
+    # Supported values:
+    # fraud
+    # loan
+    - name: model-name
+      value: "fraud"
+
+    # Version that will be created in MinIO
     - name: model-version
-      value: "2"
+      value: "1"
+
+    # MinIO bucket
+    - name: minio-bucket
+      value: "models"
+
+
+  # ----------------------------------------------------------
+  # Shared workspace
+  #
+  # Git clone, training, conversion, validation and upload
+  # all use this same PVC.
+  # ----------------------------------------------------------
 
   workspaces:
 
@@ -26,12 +58,15 @@ spec:
 
       volumeClaimTemplate:
 
+        metadata:
+          labels:
+            app: bank-model-mlops
+
         spec:
 
           accessModes:
             - ReadWriteOnce
 
           resources:
-
             requests:
               storage: 2Gi
